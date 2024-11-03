@@ -24,10 +24,13 @@ A review of the `CurveLPOracle` and `CurveLPOracleFactory` contract.
 
 The `CurveLPOracle` and `CurveLPOracleFactory` contracts are part of a decentralized finance (DeFi) protocol for obtaining price data from Curve liquidity pools (LPs). These contracts are developed by the Dai Foundation and provide an on-chain oracle for fetching and managing prices of Curve LP tokens, which represent a user's share in a Curve pool.
 
-### 2. Overview of Curve Pools and StableSwap Invariant
+### 2. Overview of Curve Pools, Oracle and StableSwap Invariant
+
+#### **Oracles**
+In blockchain and DeFi, an oracle is a service that supplies external data (such as asset prices) to smart contracts. Since blockchains are isolated from the outside world, oracles are essential for pulling real-world information, such as cryptocurrency prices, fiat currency exchange rates, or weather data, into smart contracts. In this case, CurveLPOracle provides real-time price data for LP tokens, based on underlying pool assets and their current virtual price in Curve.
 
 #### **Curve Pools**
-Curve pools are DeFi liquidity pools designed for stablecoins or similar assets. They allow users to swap between assets with minimal slippage due to their specialized design, which leverages the StableSwap invariant. Curve pools consist of two or more stablecoins (or similar assets) and offer yield opportunities by allowing users to provide liquidity and earn fees from swaps.
+Curve pools are DeFi liquidity pools designed for stablecoins or similar assets like USDT, USDC, DAI etc. They allow users to swap between assets with minimal slippage due to their specialized design, which leverages the StableSwap invariant. Curve pools consist of two or more stablecoins (or similar assets) and offer yield opportunities by allowing users to provide liquidity and earn fees from swaps.
 
 #### **StableSwap Invariant**
 The StableSwap invariant is a mathematical formula designed by Curve Finance to maintain liquidity and ensure low slippage when swapping stablecoins. The formula defines the pool's asset reserves and pricing, maintaining stable prices around the equilibrium and creating efficient trades between similar assets.
@@ -56,8 +59,32 @@ The `CurveLPOracleFactory` contract deploys instances of `CurveLPOracle`, settin
 
 #### 4.2 Functions in CurveLPOracleFactory
 
-- **`constructor(address addressProvider)`**: Initializes the factory by setting the `ADDRESS_PROVIDER` with the provided address, allowing it to interact with the Curve registry.
-- **`build`**: Deploys a new `CurveLPOracle` instance with specified parameters such as the pool address, oracle addresses for each pool asset, and whitelisting options. It checks that the number of provided oracles (`_orbs`) matches the number of assets in the Curve pool (`ncoins`), then emits the `NewCurveLPOracle` event to log each new instance.
+#### Constructor
+```constructor(address addressProvider)
+```
+- **`addressProvider`**: The address of an `AddressProviderLike` contract. This provider is a utility contract in Curve that allows the contract to access the registry (a contract that keeps ttrack of all the actove liquididty pools on the platform) of Curve pools and query specific details about them. The `ADDRESS_PROVIDER` variable is set to this address, making it available to other functions within `CurveLPOracleFactory`.
+
+#### `build` Function
+```
+function build(
+    address _owner,
+    address _pool,
+    bytes32 _wat,
+    address[] calldata _orbs,
+    bool _nonreentrant
+) external returns (address orcl)
+```
+This function creates and deploys a new `CurveLPOracle` instance.
+
+- **`_owner`**: The address to be granted admin privileges (`wards`) mapping for the new `CurveLPOracle`. This address can perform sensitive actions such as stopping and starting updates, adjusting the update frequency (`hop`), and managing whitelisted addresses.
+- **`_pool`**: The address of the Curve liquidity pool for which the oracle will provide pricing. This pool address is used to get information such as virtual price and supported tokens.
+
+- **`_wat`**: A `bytes32` identifier for the asset whose price is being tracked by the oracle. This label is typically used in DeFi protocols to distinguish between different assets.
+
+- **`_orbs`**: An array of addresses of external oracles, each corresponding to a token in the Curve pool. Each oracle in `_orbs` provides a price for a specific token, and the length of this array should match the number of tokens in the pool.
+
+- **`_nonreentrant`**: A boolean flag indicating whether the `CurveLPOracle` should prevent reentrant calls to the Curve pool when updating liquidity. This is a security measure to ensure the oracle doesn’t interact with a pool that could allow malicious reentrant calls.
+
 
 ---
 
@@ -91,42 +118,109 @@ The `CurveLPOracle` contract holds the main logic for fetching, updating, and pr
 #### 5.2 Functions in CurveLPOracle
 
 - **Authorization Functions**
-  - `rely`, `deny`: Manage admin privileges for addresses.
-  - `kiss`, `diss`: Add or remove addresses from the whitelist (`bud`).
+##### `rely` and `deny` Functions
+```
+function rely(address _usr) external auth
+function deny(address _usr) external auth
+```
+These functions grant or revoke admin privileges.
 
-- **Price Update Functions**
-  - `poke()`: The main function that updates the LP token price by querying each oracle (`orbs`) for prices, calculating the minimum price among them, and adjusting for the virtual price of the Curve pool. After updating, it sets `zph` to the next allowable update time and emits the `Value` event.
-  - `step(uint16 _hop)`: Changes the `hop` interval, controlling the minimum time between updates.
-  - `stop` and `start`: Toggle the `stopped` flag to prevent or allow price updates.
+- **`_usr`**: The address to be granted (`rely`) or revoked (`deny`) admin privileges. Only admins can call these functions (enforced by the `auth` modifier).
 
-- **Price Access Functions**
-  - `peek()`: Returns the current price and its validity status for a whitelisted address.
-  - `peep()`: Returns the next price and its validity status.
-  - `read()`: Returns the current price if it’s valid, reverting if not.
+#### State Variables and Initialization
 
-- **Auxiliary Functions**
-  - `link`: Updates the oracle address for a specific token in the pool.
+##### Constructor
+```
+constructor(
+    address _ward,
+    address _pool,
+    bytes32 _wat,
+    address[] memory _orbs,
+    bool _nonreentrant
+)
+```
+- **`_ward`**: The address to be granted initial admin (ward) privileges for the contract.
+- **`_pool`**: The Curve pool address associated with this oracle.
+- **`_wat`**: A label representing the asset the oracle is tracking.
+- **`_orbs`**: Array of oracle addresses, each representing a token in the Curve pool.
+- **`_nonreentrant`**: Boolean to control reentrancy checks with the Curve pool.
 
-- **receive()**: Accepts Ether, which is required for Curve pool reentrancy checks.
+#### Oracle Management and Price Updates
+
+##### `step` Function
+```
+function step(uint16 _hop) external auth
+```
+The `step` function changes the minimum interval between oracle updates.
+
+- **`_hop`**: The new minimum time interval (in seconds) between updates. This is stored in `hop` and is used to throttle updates by requiring this period to elapse before the next update.
+
+##### `link` Function
+```
+function link(uint256 _id, address _orb) external auth
+```
+The `link` function allows updating the oracle address for a specific token in the Curve pool.
+
+- **`_id`**: The index of the token in the pool (zero-based). Each token in the pool is represented by an index, and this allows changing the oracle associated with that specific token.
+- **`_orb`**: The new oracle address for the token at index `_id`. The address must be non-zero.
+
+##### `poke` Function
+```
+function poke() external payable
+```
+The `poke` function fetches the latest prices from the token oracles and calculates the current LP token price based on the lowest token price and the virtual price of the Curve pool.
+
+- **No parameters**: Although it’s marked `payable`, it doesn’t accept ETH. This marking is solely to save gas.
+
+#### Price Retrieval Functions
+
+##### `peek` Function
+```
+function peek() external view toll returns (bytes32, bool)
+```
+The `peek` function retrieves the current price of the LP token without requiring the price to be valid.
+
+- **No parameters**: Calls to `peek` retrieve the current LP token price and whether it’s valid (e.g., has been updated since initialization). Only addresses whitelisted in `bud` (using the `toll` modifier) can call this function.
+
+##### `peep` Function
+```
+function peep() external view toll returns (bytes32, bool)
+```
+The `peep` function retrieves the next LP token price in the queue, indicating what the price will be after the next update.
+
+- **No parameters**: Calls to `peep` return the next queued price for the LP token and whether it’s valid. Like `peek`, this function is restricted to whitelisted addresses.
+
+##### `read` Function
+```
+function read() external view toll returns (bytes32)
+```
+The `read` function retrieves the current LP token price, ensuring it’s valid. If the price isn’t valid, it reverts.
+
+- **No parameters**: This function returns the current price but only if it’s marked valid. It’s useful for cases where the caller requires a valid price or the transaction should fail.
+
+#### Whitelisting Controls
+
+##### `kiss` and `diss` Functions
+```
+function kiss(address _a) external auth
+function kiss(address[] calldata _a) external auth
+function diss(address _a) external auth
+function diss(address[] calldata _a) external auth
+```
+These functions manage whitelisted addresses that can access certain restricted functions (e.g., `peek`, `peep`, `read`).
+
+- **`_a`**: An address or array of addresses to be added or removed from the whitelist. This is done by setting the corresponding value in `bud` to 1 (whitelisted) in `kiss` and to 0 (removed) in `diss`.
 
 ---
 
-### 6. Security and Gas Optimization Considerations
+### Fallback Functions
 
-#### **Security**
-- **Reentrancy**: Reentrancy is partially protected by `nonreentrant`, which prevents unauthorized state changes during price updates.
-- **Oracle Manipulation**: Since the oracle relies on external price feeds (`orbs`), any manipulation or malfunction in these feeds could affect the price accuracy. It’s crucial to use trusted oracle sources.
-- **Overflow and Underflow**: The contract uses Solidity 0.8, which has built-in overflow checks, reducing risks of arithmetic errors.
+##### `receive` Function
+```
+receive() external payable
+```
+This fallback function allows the contract to receive ETH, though no ETH should be sent to it in normal usage. Marking it `payable` saves gas by eliminating additional checks for ETH transfers when calling `poke`.
 
-#### **Gas Optimization**
-- **Packed State Variables**: Variables `stopped`, `hop`, and `zph` are packed together, saving gas on SLOAD operations.
-- **Assembly Code**: Low-level assembly optimizes gas in `poke()`, reducing the number of SLOADs and directly updating `zph`.
-- **Immutability**: `ADDRESS_PROVIDER`, `pool`, `wat`, and similar constants are marked `immutable`, optimizing deployment costs.
+---
 
-### 7. Conclusion
-
-The `CurveLPOracle` and `CurveLPOracleFactory` contracts are designed to support Curve LP token oracles in DeFi applications. They use efficient mechanisms for price aggregation and update frequency control, while taking advantage of optimizations like variable packing and assembly.
-
-However, the contract requires careful setup with trusted oracles (`orbs`) and addresses for the Curve pools to ensure data accuracy. Additionally, reentrancy protection should be thoroughly tested, especially around the `poke` function, which interacts with external contracts.
-
-With proper testing and secure setup, these contracts serve as a robust solution for Curve LP token price oracles in the DeFi ecosystem.
+This detailed breakdown explains each parameter within the functions, making it easier to understand their roles within the `CurveLPOracleFactory` and `CurveLPOracle` contracts.
