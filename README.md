@@ -1,4 +1,4 @@
-Below is a structured review of the `CurveLPOracle` and `CurveLPOracleFactory` contract you provided, with a table of contents. It covers key aspects of the contract, such as state variables, functions, and their roles, as well as explanations of Curve pools, the StableSwap invariant, and how they are used within this contract.
+A review of the `CurveLPOracle` and `CurveLPOracleFactory` contract.
 
 ---
 
